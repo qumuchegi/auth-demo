@@ -12,7 +12,7 @@ function ModifyPassword(){
            // 支持 session 的 axios 调用
            //let res = await axios_session().post('http://localhost:3002/modify',{newPassword:input.current.value})
 
-           // 支持 JWT 的 axios 调用
+           // 支持 JWT/OAuth2.0 的 axios 调用
            let res = await axios_JWT().post('http://localhost:3002/modify',{newPassword:input.current.value})
            
            if(res.data.code === 0)

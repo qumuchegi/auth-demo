@@ -107,11 +107,11 @@
 
 app.use(cors({
   credentials:  true,
-  origin:  'http://127.0.0.1:8082',  // web前端服务器地址，，不能设置为 * 
+  origin:  'http://localhost:8082',  // web前端服务器地址，，不能设置为 * 
 
 }))
 ```
-我开始就是因为没有设置这个，所以遇到了问题，就是后端登录接口生成 `req.session.username = req.body.username` 之后，在修改用户密码的接口需要再读取  `req.session.username` 以验证用户的时候读取不到 `req.session.username` ，很明显两个接口的 `req.session` 不是同一个 `session`，果然 console 出来 的 `session ID` 是不同的。这就让我想到了 cookie，cookie 是生成之后每次请求都会带上并且后端可以访问的，现在存储在 cookie 中的 session ID 没有被读取到而是读取到了新 session ID，所以问题就出在后端不能拿到 cookie，也有可能是因为前端发送不出去 cookie。顺着这个思路我在网上搜索 “cookie 为什么读取不到”，果然就找到了答案。可是开始的时候搜索关于 session ID 读取不一致的这个问题我找不到解决办法，而且发现很多人存在同样的问题，但是没有人给出答案，现在通过自己的思考想到了解决办法，这是很多人需要避免的巨坑。
+我开始就是因为没有设置这个，所以遇到了问题，就是后端登录接口在session中保存 用户名（ `req.session.username = req.body.username`） 之后，在修改用户密码的接口需要读取  `req.session.username` 以验证用户的时候读取不到 `req.session.username` ，很明显两个接口的 `req.session` 不是同一个 `session`，果然 console 出来 的 `session ID` 是不同的。这就让我想到了 cookie，cookie 是生成之后每次请求都会带上并且后端可以访问的，现在存储在 cookie 中的 session ID 没有被读取到而是读取到了新 session ID，所以问题就出在后端不能拿到 cookie，也有可能是因为前端发送不出去 cookie。可是开始的时候搜索关于 session ID 读取不一致的这个问题我找不到解决办法，而且发现很多人存在同样的问题，但是没有人给出答案，现在通过自己的思考想到了解决办法，这是很多人需要避免的巨坑。
 
 现在跨过了最大的一个坑，我们就可以来编写前后端所有的逻辑了。关于注册的逻辑，是一个很简单的用户注册信息填写页面，它发送用户的名字和密码到后端注册接口，后端注册接口保存用户的名字和密码到数据库理。因此我在这里省略掉前端注册页面和后端注册接口，只讲前端登录页面和后端登录接口，前端修改密码页面和后端修改密码接口和登出接口。
 
@@ -271,12 +271,12 @@ app.use(session({
 
 ## 2. 使用 JWT 授权
 ### 2.1 JWT 的原理：
-首先来看看 JWT 的概念，JWT 的 token 由 头部(head)、数据(payload)、签名(signature) 3个部分组成。其中头部（header）和数据（payload）经过 base64 编码后经过秘钥 secret的签名，就生成了第三部分----签名(signature) ，最后将 base64 编码的 header 和 payload 以及 signature 这3个部分用圆点 . 连接起来就生成了最终的 token。
+首先来看看 JWT 的概念，JWT 的 token 由 头部(head)、数据(payload)、签名(signature) 3个部分组成 具体每个部分的结构组成以及JWT更深的讲解可以看看[这个](https://auth0.com/learn/json-web-tokens/)。其中头部（header）和数据（payload）经过 base64 编码后经过秘钥 secret的签名，就生成了第三部分----签名(signature) ，最后将 base64 编码的 header 和 payload 以及 signature 这3个部分用圆点 . 连接起来就生成了最终的 token。
 
       signature = HMACSHA256(base64UrlEncode(header) + "." + base64UrlEncode(payload), secret)
       token = base64UrlEncode(header) + "." + base64UrlEncode(payload) + signature
 
-token 生成之后，可以将其发送给客户端，用客户端来存储并在以后每次请求中发送会后端用于验证用户。前端存储和发送 token 的方式有以下两种：
+token 生成之后，可以将其发送给客户端，由客户端来存储并在以后每次请求中发送会后端用于验证用户。前端存储和发送 token 的方式有以下两种：
 
 #### 2.1.1 使用 Header.Authorization + localStorage 存储和发送 token
 在 localStorage 中存储 token，通过请求头 Header 的 Authorization 字段将 token发送给后端。
@@ -495,3 +495,156 @@ function JWT_auth(req,res,next){
 module.exports = JWT_auth
 ```
 
+## 3. 使用 OAuth 2.0 授权：
+### 3.1 OAuth 2.0 是什么
+有的应用会提供第三方应用登录，比如掘金 web 客户端提供了微信、QQ账号登录，我们可以不用注册掘金账号，而可以用已有的微信账号登录掘金。看看用微信登录掘金的过程：
+
+>step1: 打开掘金，未登录状态，点击登录，掘金给我们弹出一个登录框，上面有微信、QQ登录选项，我们选择微信登录；<br/>
+step2: 之后掘金会将我们重定向到微信的登录页面，这个页面给出一个二维码供我们扫描，扫描之后；<br/>
+step3: 我们打开微信，扫描微信给的二维码之后，微信询问我们是否同意掘金使用我们的微信账号信息，我们点击同意；<br/>
+step4: 掘金刚才重定向到微信的二维码页面，现在我们同意掘金使用我们的微信账号信息之后，又重定向回掘金的页面，同时我们可以看到现在掘金的页面上显示我们已经处于登录状态，所以我们已经完成了用微信登录掘金的过程。<br/>
+
+这个过程比我们注册掘金后才能登录要快捷多了。这归功于 OAuth2.0 ，它允许客户端应用（掘金）可以访问我们的资源服务器（微信），我们就是资源的拥有者，这需要我们允许客户端（掘金）能够通过认证服务器（在这里指微信，认证服务器和资源服务器可以分开也可以是部署在同一个服务上）的认证。很明显，OAuth 2.0 提供了4种角色，资源服务器、资源的拥有者、客户端应用 和 认证服务器，它们之间的交流实现了 OAuth 2.0 整个认证授权的过程。
+
+OAuth 2.0 登录的原理，根据4中不同的模式有所不同。本文使用授权码模式，所以只讲授权码模式下 OAuth2.0 的登录过程，其他模式可以自行搜索学习。
+
+### 3.2 使用 GitHub OAuth 来登录我们的项目客户端
+可以参考[GitHub 官网](https://developer.github.com/apps/building-oauth-apps/authorizing-oauth-apps/)。
+下面我们改用 OAuth2.0 来使用 GitHub 账号来授权我们上面的应用，从而修改我们应用的密码。
+
+步骤：
+
+1. 在 GitHub 上申请注册一个 OAuth application：https://github.com/settings/applications/new。
+填写我们的应用名称、应用首页和授权需要的回调 URL：
+
+
+![](./imgs/github-auth.png)
+
+2. 然后GitHub 生成了 Client ID 和 Client Secret：
+
+![](./imgs/github-auth-res.png)
+
+3. 之后我们在我们原有的登录页面增加一个使用 GitHub 账号登录的入口：
+
+![](./imgs/github-login-btn.png)
+
+这个登录入口其实就是一个指向GitHub铜壶登录页面的连接
+
+```js
+ <a href='https://github.com/login/oauth/authorize?client_id=211383cc22d28d9dac52'> 使用 GitHub 账号登录 </a>
+```
+4. 用户进入上面的 GitHub 登录页面之后，可以输入自己的GitHub用户名和密码登录，然后 GitHub 会将授权码以回调形式传回之前我们设置的 http://localhost:3002/login/callback 这个页面上，比如 http://localhost:3002/login/callback?code=37646a38a7dc853c8a77,
+我们可以在 http://localhost:3002/login/callback 这个路由获取 code 授权码，并结合我们之前获得的 client-is、client_secret，向https://github.com/login/oauth/access_token请求token，token 获取之后，我们可以用这个 token向 https://api.github.com/user?access_token=用户的token 请求到用户的GitHub账号信息比如GitHub用户名、头像等等。
+
+```js
+// server/routes/login.js:
+
+// 使用 OAuth2.0 时的登录接口，
+router.get('/callback',async (req,res,next)=>{//这是一个授权回调，用于获取授权码 code
+    var code = req.query.code; // GitHub 回调传回 code 授权码
+    console.log(code)
+    
+    // 带着 授权码code、client_id、client_secret 向 GitHub 认证服务器请求 token
+    let res_token = await axios.post('https://github.com/login/oauth/access_token',
+    {
+        client_id:Auth_github.client_id,
+        client_secret:Auth_github.client_secret,
+        code:code
+    })
+   console.log(res_token.data)
+
+   let token = res_token.data.split('=')[1].replace('&scope','')
+   
+
+   // 带着 token 从 GitHub 获取用户信息
+   let github_API_userInfo = await axios.get(`https://api.github.com/user?access_token=${token}`)
+   console.log('github 用户 API：',github_API_userInfo.data)
+
+   let userInfo = github_API_userInfo.data
+
+   // 用户使用 GitHub 登录后，在数据库中存储 GitHub 用户名
+   users.findOne({username:userInfo.name},(err,oldusers)=>{ // 看看用户之前有没有登录过，没有登录就会在数据库中新增 GitHub 用户
+    if(oldusers) {
+        res.cookie('auth_token',res_token.data)
+        res.cookie('userAvatar',userInfo.avatar_url)
+        res.cookie('username',userInfo.name)
+
+        res.redirect(301,'http://localhost:8082') // 从GitHub的登录跳转回我们的客户端页面
+        return
+    }else
+    new users({
+        username:userInfo.name,
+        password:'123', // 为使用第三方登录的能够用户初始化一个密码，后面用户可以自己去修改
+    }).save((err,savedUser)=>{
+        if(savedUser){
+            res.cookie('auth_token',res_token.data)
+            res.cookie('userAvatar',userInfo.avatar_url)
+            res.cookie('username',userInfo.name)
+         
+            res.redirect(301,'http://localhost:8082') // 从GitHub的登录跳转回我们的客户端页面
+        }
+    })
+   })
+},
+)
+module.exports = router
+
+```
+在请求到用户的GitHub信息之后，我们可以将用户头像和用户名存在cookie、里，便于发送给前端在页面上显示出来，告诉用户他已经用GitHub账号登录了我们的客户端。
+同时，我们把GitHub用户名存到我们自己的数据库里，并给一个‘123’简单的初始化密码，后面用户可以在获得权限后修改密码。
+
+5. 接下来，我们使用GitHub登录后，我们需要获得授权以修改我们的密码。
+
+我们使用和 JWT 一样的发送token的方式，前面我们从GitHub获得用户的token之后有已经用cookie的方式将其发送给前端，我们在前端可以读取cookie里的token，然后将其通过 Authorization 头方式给后端验证：
+
+前端读取 token，并加到  Authorization 里：
+
+```js
+ // OAuth2.0
+    axios.interceptors.request.use(config => {
+        // 在 localStorage 获取 token
+        let token = localStorage.getItem("token");
+        console.log('axios配置:token',token)
+        // 如果存在则设置请求头
+        if(document.cookie){
+            let OAtuh_token = unescape(document.cookie.split(';').filter(e=>/auth_token/.test(e))[0].replace(/auth_token=/,''))
+            config.headers['Authorization'] = OAtuh_token;
+            console.log(config)
+        }
+       
+        return config;
+    });
+   
+```
+
+后端验证中间件 ：
+
+```js
+const axios = require('axios')
+
+const OAuth=async (req,res,next)=>{
+    let OAuth_token = req.headers["authorization"]
+    console.log('authorization',OAuth_token)
+    console.log('OAuth 中间件拿到cookie中的token：',OAuth_token)
+    if(OAuth_token) {
+        let token = OAuth_token.split('=')[1].replace('&scope','')
+        let github_API_userInfo = await axios.get(`https://api.github.com/user?access_token=${token}`)
+        let username = github_API_userInfo.data.name
+        req.username = username
+        next()
+    }
+    else res.status(401)
+}
+module.exports = OAuth
+```
+
+### 3.3 使用 GitHub OAuth2.0 登录授权的效果图：
+
+![](./imgs/OAuth.gif)
+
+## 总结
+session、JWT、OAuth2.0 这三种授权方式每一种里面都会有其他方式的影子，主要是体现在用户凭证的存储和发送上，比如通常所说的基于服务端的 session，它可以把用户凭证，也就是 session ID 存储在服务端（内存或者数据库redis等），但是也是可以发给前端通过cookie保存的。JWT 可以把作为用户凭证的 token 在服务端签发后发给用户保存，可以在 localStorage 保存，同样也可以保存在 cookie 。OAuth2.0是比较复杂的一种授权方式，但是它后面获得 token 后也可以向 JWT 一样处理 token 的保存和验证来授权用户。
+
+不管是哪种方式，都会有一些要注意的安全问题，还有性能上需要兼顾的地方。这里有关这方面不再赘述。
+
+最后，本项目的地址：[https://github.com/qumuchegi/auth-demo](https://github.com/qumuchegi/auth-demo)
